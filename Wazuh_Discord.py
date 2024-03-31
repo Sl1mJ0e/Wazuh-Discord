@@ -11,73 +11,75 @@ import json
 import sys
 import time
 import os
+from typing import Dict
+from enum import Enum
 
 try:
     import requests
     from requests.auth import HTTPBasicAuth
-except Exception as e:
+except ImportError as e:
     print("No module 'requests' found. Install: pip install requests")
     sys.exit(1)
 
-# Global vars
+# Constants
+LOG_FILE = '{0}/logs/integrations.log'
+ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
 
-debug_enabled = False
-pwd = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-json_alert = {}
-now = time.strftime("%a %b %d %H:%M:%S %Z %Y")
+# Custom exceptions
+class InvalidArgumentsError(Exception):
+    pass
 
-# Set paths
-log_file = '{0}/logs/integrations.log'.format(pwd)
+class WazuhIntegrationError(Exception):
+    pass
 
-# Mapping of agent names to Discord webhook URLs
-agent_webhooks = {
-    'Agent-Name-1': 'YOUR DISCORD WEBHOOK HERE',
-    'Agent-Name-2': 'YOUR DISCORD WEBHOOK HERE', 
-    # Add more agents and their webhook URLs here
-}
+def main(args: Dict[str, str]) -> None:
+    try:
+        alert_file_location = args['alert_file_location']
+        debug_enabled = args.get('debug_enabled', False)
 
-def main(args):
-    debug("# Starting")
+        debug("# Starting")
+        debug(f"# File location: {alert_file_location}")
 
-    # Read args
-    alert_file_location = args[1]
+        with open(alert_file_location) as alert_file:
+            json_alert = json.load(alert_file)
+        debug("# Processing alert")
+        debug(json_alert)
 
-    debug("# File location")
-    debug(alert_file_location)
+        agent_name = json_alert.get('agent', {}).get('name')
+        webhook = get_agent_webhook(agent_name)
 
-    # Load alert. Parse JSON object.
-    with open(alert_file_location) as alert_file:
-        json_alert = json.load(alert_file)
-    debug("# Processing alert")
-    debug(json_alert)
+        debug("# Generating message")
+        msg = generate_msg(json_alert)
+        debug(msg)
 
-    # Get the rule ID
-    rule_id = json_alert['rule']['id']  
+        debug("# Sending message")
+        send_msg(msg, webhook)
 
-    # Get agent name from alert data
-    agent_name = json_alert.get('agent', {}).get('name')
-    
-    # Get webhook URL for this agent
-    webhook = agent_webhooks.get(agent_name)
+    except InvalidArgumentsError as e:
+        debug(str(e))
+        sys.exit(1)
+    except WazuhIntegrationError as e:
+        debug(str(e))
+        raise
 
-    debug("# Generating message")
-    msg = generate_msg(json_alert)
-    debug(msg)
-
-    debug("# Sending message")
-    send_msg(msg, webhook)
-
-
-def debug(msg):
-    if debug_enabled:
-        msg = "{0}: {1}\n".format(now, msg)
+def debug(msg: str) -> None:
+    if ENVIRONMENT != 'production':
+        now = time.strftime("%a %b %d %H:%M:%S %Z %Y")
+        msg = f"{now}: {msg}\n"
         print(msg)
-        f = open(log_file, "a")
-        f.write(msg)
-        f.close()
+        with open(get_log_file(), "a") as log_file:
+            log_file.write(msg)
 
+def get_agent_webhook(agent_name: str) -> str:
+    webhooks_file = os.path.join(os.path.dirname(__file__), 'agent_webhooks', 'webhooks.json')
+    with open(webhooks_file, 'r') as file:
+        agent_webhooks = json.load(file)
+    webhook = agent_webhooks.get(agent_name)
+    if webhook is None:
+        raise WazuhIntegrationError(f"No webhook found for agent: {agent_name}")
+    return webhook
 
-def generate_msg(alert):
+def generate_msg(alert: Dict) -> str:
     # Extract the 'data' key if it exists, otherwise set defaults
     data = alert.get('data', {})
     srcport = data.get('srcport', 'N/A')
@@ -106,39 +108,34 @@ def generate_msg(alert):
     location = alert['location']
 
     # Determine color based on the rule level
-    if level == 3:
-        color = "3731970"  # green
-    elif 6 <= level <= 12:
-        color = "15870466"  # red
-    else:
-        color = "15919874"  # yellow
+    color = get_color_for_level(level)
 
     # Create the payload with data
     payload = json.dumps({
         "embeds": [
             {
-                "title": "Wazuh Alert - Rule {}".format(alert['rule']['id']),
-                "color": "{}".format(color),
-                "description": "{}".format(description),
+                "title": f"Wazuh Alert - Rule {alert['rule']['id']}",
+                "color": color,
+                "description": description,
                 "fields": [
                     {
                         "name": "Agent",
-                        "value": "{}".format(agent_name),
+                        "value": agent_name,
                         "inline": True
                     },
                     {
                         "name": "Log Source",
-                        "value": "{}".format(location),
+                        "value": location,
                         "inline": True
                     },
                     {
                         "name": "Rule Level",
-                        "value": "{}".format(level),
+                        "value": str(level),
                         "inline": True
                     },
                     {
                         "name": "Data",
-                        "value": "SrcUser: {}, SrcIP: {}, SrcPort: {}, DstUser: {}".format(srcuser, srcip, srcport, dstuser),
+                        "value": f"SrcUser: {srcuser}, SrcIP: {srcip}, SrcPort: {srcport}, DstUser: {dstuser}",
                         "inline": True
                     }
                 ]
@@ -148,39 +145,37 @@ def generate_msg(alert):
 
     return payload
 
+def get_color_for_level(level: int) -> str:
+    if level == 3:
+        return "3731970"  # green
+    elif 6 <= level <= 12:
+        return "15870466"  # red
+    else:
+        return "15919874"  # yellow
 
-# noinspection PyUnreachableCode
-def send_msg(msg, url):
+def send_msg(msg: str, url: str) -> None:
     headers = {'content-type': 'application/json', 'Accept-Charset': 'UTF-8'}
-    res = requests.post(url, data=msg, headers=headers)
-    debug(res)
+    try:
+        requests.post(url, data=msg, headers=headers)
+    except requests.exceptions.RequestException as e:
+        raise WazuhIntegrationError(f"Error sending message to Discord: {str(e)}")
 
+def get_log_file() -> str:
+    pwd = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    return os.path.join(pwd, 'logs', 'integrations.log')
 
 if __name__ == "__main__":
     try:
-        # Read arguments
-        bad_arguments = False
-        if len(sys.argv) >= 2:
-            msg = '{0} {1}'.format(
-                now,
-                sys.argv[1]
-            )
-            debug_enabled = (len(sys.argv) > 2 and sys.argv[2] == 'debug')
-        else:
-            msg = '{0} Wrong arguments'.format(now)
-            bad_arguments = True
+        if len(sys.argv) < 2:
+            raise InvalidArgumentsError("Wrong arguments")
 
-        # Logging the call
-        f = open(log_file, 'a')
-        f.write(msg + '\n')
-        f.close()
+        alert_file_location = sys.argv[1]
+        debug_enabled = len(sys.argv) > 2 and sys.argv[2] == 'debug'
 
-        if bad_arguments:
-            debug("# Exiting: Bad arguments.")
-            sys.exit(1)
-
-        # Main function
-        main(sys.argv)
+        main({
+            'alert_file_location': alert_file_location,
+            'debug_enabled': debug_enabled
+        })
 
     except Exception as e:
         debug(str(e))
