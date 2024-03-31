@@ -1,0 +1,4 @@
+{
+  "wazuh-agent-1": "https://discord.com/api/webhooks/your-webhook-url-1",
+  "wazuh-agent-2": "https://discord.com/api/webhooks/your-webhook-url-2"
+}
