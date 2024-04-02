@@ -16,7 +16,8 @@ This is a custom integration for Wazuh that sends alerts to Discord using webhoo
      - Rule Level: The severity level of the rule
      - Data: Additional data extracted from the alert (SrcUser, SrcIP, SrcPort, DstUser)
 
-3. Support for multiple agents has been added. The `agent_webhooks` dictionary maps agent names to their corresponding Discord webhook URLs. This allows sending alerts to different Discord channels based on the agent that triggered the alert.
+3. Support for multiple agents has been added in a different way since the first version of the integration. The agent-webhook mappings are now stored in a separate `webhooks.json` file located in the `agent_webhooks` directory. This allows for easier management and updating of the mappings without modifying the script itself.
+
 
 ## How the Integration Works
 
@@ -24,13 +25,13 @@ This is a custom integration for Wazuh that sends alerts to Discord using webhoo
 
 2. The integration is defined in the Wazuh manager's configuration file (`ossec.conf`) using an `<integration>` block.
 
-3. The `<integration>` block specifies the name of the custom integration (`custom-discord`), with the alert format (`json`).
+3. The `<integration>` block specifies the name of the custom integration (`custom-discord`) and the alert format (`json`).
 
 4. When the integration is triggered, Wazuh executes a custom script (`custom-discord`) located in the `/var/ossec/integrations/` directory.
 
-5. The `custom-discord` script is a bash script that calls a Python script (`custom-discord.py`) with the appropriate arguments, including the path to the alert file.
+5. The `custom-discord` (`in the '/var/ossec/integrations directory`) script is a bash script that calls a Python script (`custom-discord.py`) with the appropriate arguments, including the path to the alert file.
 
-6. The `custom-discord.py` script reads the alert file, extracts relevant information, and generates a formatted message payload.
+6. The `custom-discord.py` script reads the alert file, extracts relevant information and generates a formatted message payload.
 
 7. The `generate_msg()` function in `custom-discord.py` is responsible for creating the message payload that will be sent to the Discord webhook.
 
@@ -38,16 +39,29 @@ This is a custom integration for Wazuh that sends alerts to Discord using webhoo
 
 9. The Discord webhook receives the message payload and posts it in the designated channel.
 
+
 ## Implementing the Integration in Wazuh
 
 1. Create a new webhook in your Discord server by going to the server settings, selecting the desired channel, and configuring the webhook.
 
-2. Copy the webhook URL provided by Discord.
+2. Create a new directory named `agent_webhooks` in the same location as the `custom-discord.py` script.
 
-3. Open the Wazuh manager's configuration file (`ossec.conf`) using a text editor:
+3. Inside the `agent_webhooks` directory, create a file named `webhooks.json` with the following structure:
+   ```json
+   {
+     "wazuh-agent-1": "https://discord.com/api/webhooks/your-webhook-url-1",
+     "wazuh-agent-2": "https://discord.com/api/webhooks/your-webhook-url-2"
+   }
+   ```
+
+4. Update the agent_webhooks dictionary with the appropriate agent names and their corresponding Discord webhook URLs.
+
+5. Copy the contents of the custom-discord.py provided in this repo into the file (or just clone the repo).
+
+6. Open the Wazuh manager's configuration file (`ossec.conf`) using a text editor:
 - vim /var/ossec/etc/ossec.conf
 
-4. Add the following `<integration>` block to the configuration file:
+7. Add the following `<integration>` block to the configuration file:
 ```xml
 <integration>
   <name>custom-discord</name>
@@ -55,22 +69,13 @@ This is a custom integration for Wazuh that sends alerts to Discord using webhoo
 </integration>
 ```
 
-5. Create a new Python script file named custom-discord.py in the /var/ossec/integrations/ directory:
-- vim /var/ossec/integrations/custom-discord
-
-6. Copy the contents of the custom-discord.py bash script provided in this repo into the file.
-
-7. Copy the contents of the modified custom-discord.py Python script into the file.
-
-8. Update the agent_webhooks dictionary in custom-discord.py with the appropriate agent names and their corresponding Discord webhook URLs.
-
-9. Make sure both the custom-discord and custom-discord.py scripts have execute permissions:
+8. Make sure both the custom-discord and custom-discord.py scripts have execute permissions:
 ```
 chmod +x /var/ossec/integrations/custom-discord
 chmod +x /var/ossec/integrations/custom-discord.py
 ```
 
-10. Restart the Wazuh manager to apply the changes:
+9. Restart the Wazuh manager to apply the changes:
 ```
 systemctl restart wazuh-manager
 ```
